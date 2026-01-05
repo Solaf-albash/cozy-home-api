@@ -16,24 +16,28 @@ class BookingService
      * @return bool
      * @throws Exception
      */
-    public function hasConflictingBookings(int $apartmentId, string $startDate, string $endDate): bool
-    {
-        try {
-            $conflictCount = Booking::where('apartment_id', $apartmentId)
-                ->where('status', 'approved')
-                ->where(function ($query) use ($startDate, $endDate) {
-                    $query->whereBetween('start_date', [$startDate, $endDate])
-                        ->orWhereBetween('end_date', [$startDate, $endDate])
-                        ->orWhere(function ($q) use ($startDate, $endDate) {
-                            $q->where('start_date', '<=', $startDate)
-                                ->where('end_date', '>=', $endDate);
-                        });
-                })
-                ->count();
-        } catch (\Exception $e) {
-            throw new Exception("Error checking for conflicting bookings: " . $e->getMessage());
+/**
+     */
+    public function checkForConflicts(
+        int $apartmentId,
+        string $startDate,
+        string $endDate,
+        ?int $exceptBookingId = null,
+        array $statuses = ['approved'] // <-- الإضافة الجديدة
+    ): void {
+        $query = Booking::where('apartment_id', $apartmentId)
+            ->where(function ($q) use ($startDate, $endDate) {
+                $q->where('start_date', '<', $endDate)
+                    ->where('end_date', '>', $startDate);
+            })
+            ->whereIn('status', $statuses) // <-- استخدام مصفوفة الحالات
+            ->lockForUpdate();
+
+        if ($exceptBookingId) {
+            $query->where('id', '!=', $exceptBookingId);
         }
 
-        return $conflictCount > 0;
-    }
-}
+        if ($query->exists()) {
+            throw new Exception('Sorry, the selected dates conflict with another booking.');
+        }
+    } }

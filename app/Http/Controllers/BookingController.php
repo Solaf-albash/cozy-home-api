@@ -69,38 +69,54 @@ class BookingController extends Controller
 
 
 
+public function store(StoreBookingRequest $request)
+{
+    $validatedData = $request->validated();
+    $apartmentId = $validatedData['apartment_id'];
+    $renter = $request->user();
 
-    public function store(StoreBookingRequest $request)
-    {
-        $validatedData = $request->validated();
-        $apartmentId = $validatedData['apartment_id'];
-        $renter = Auth::user()->id;
+    try {
+        return DB::transaction(function () use ($validatedData, $apartmentId, $renter) {
 
-        try {
-            return DB::transaction(function () use ($validatedData, $apartmentId, $renter) {
-                $isBooked = Booking::where('apartment_id', $apartmentId)
-                    ->whereNotIn('status', ['rejected', 'canceled', 'completed', 'pending'])
-                    ->where(function ($query) use ($validatedData) {
-                        $query->where('start_date', '<=', $validatedData['end_date'])
-                            ->where('end_date', '>=', $validatedData['start_date']);
-                    })
+            // ✅ التحقق من التضارب (approved فقط)
+            $this->bookingService->checkForConflicts(
+                $apartmentId,
+                $validatedData['start_date'],
+                $validatedData['end_date']
+            );
 
-                    ->exists();
-                    if ($isBooked) {
-                        throw new \Exception('يوجد حجز مؤكد متعارض في نفس الفترة.');
-                    }
-                $booking = Booking::create(['renter_id' => $renter,'total_price'=> 500] + $validatedData);
-                return response()->json([
-                    'message' => 'Booking request created successfully.',
-                    'booking' => $booking
-                ], 201);
-            });
-        } catch (\Exception $e) {
+            // 🟢 لا يوجد تضارب → إنشاء الحجز
+            $apartment = Apartment::findOrFail($apartmentId);
+
+            $startDate = Carbon::parse($validatedData['start_date']);
+            $endDate   = Carbon::parse($validatedData['end_date']);
+            $numberOfNights = $startDate->diffInDays($endDate) + 1;
+            $totalPrice = $numberOfNights * $apartment->price;
+
+            $booking = Booking::create([
+                'renter_id' => $renter->id,
+                'apartment_id' => $apartmentId,
+                'start_date' => $validatedData['start_date'],
+                'end_date' => $validatedData['end_date'],
+                'total_price' => $totalPrice,
+                'status' => 'pending',
+                'number_of_persons' => $validatedData['number_of_persons'],
+                'notes' => $validatedData['notes'] ?? null,
+            ]);
+
             return response()->json([
-                'message' => 'لا يمكنك الحجز في هذا الوقت، يوجد حجز مؤكد متعارض.'
-            ], 409);
-        }
+                'message' => 'Booking request created successfully.',
+                'booking' => $booking
+            ], 201);
+        });
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'message' => 'لا يمكنك الحجز في هذا الوقت، يوجد حجز مؤكد متعارض.'
+        ], 409);
     }
+}
+
 
 
 
@@ -118,7 +134,7 @@ class BookingController extends Controller
         }
 
         try {
-            $this->bookingService->hasConflictingBookings(
+            $this->bookingService->checkForConflicts(
                 $booking->apartment_id,
                 $booking->start_date,
                 $booking->end_date,
@@ -228,7 +244,7 @@ class BookingController extends Controller
 
         try {
             // في BookingController@update
-            $this->bookingService->hasConflictingBookings(
+            $this->bookingService->checkForConflicts(
                 $booking->apartment_id,
                 $newStartDate,
                 $newEndDate,
@@ -236,7 +252,7 @@ class BookingController extends Controller
             );
 
 
-            $this->bookingService->hasConflictingBookings(
+            $this->bookingService->checkForConflicts(
                 $booking->apartment_id,
                 $newStartDate,
                 $newEndDate,
